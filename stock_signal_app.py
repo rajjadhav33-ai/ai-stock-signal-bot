@@ -248,3 +248,7 @@ if run_button:
             st.error(f"Something went wrong: {e}")
 else:
     st.write("👈 Set your options in the sidebar and click **Run Model** to get a signal.")
+
+
+st.markdown("---")
+st.caption("© 2026 Raj Jadhav | All Rights Reserved")
