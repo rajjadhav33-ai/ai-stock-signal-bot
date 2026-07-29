@@ -104,7 +104,16 @@ def get_signal(df, model, features, stoploss_pct, take_profit_pct, confidence_th
 
 # ---------------- Page config (must be the very first Streamlit command) ----------------
 
-st.set_page_config(page_title="AI Stock Signal Bot", layout="centered")
+st.set_page_config(page_title="AI Stock Signal App", layout="centered")
+hide = """
+<style>
+#MainMenu {visibility:hidden;}
+footer {visibility:hidden;}
+header {visibility:hidden;}
+</style>
+"""
+
+st.markdown(hide, unsafe_allow_html=True)
 
 # ---------------- Real backend: SQLite-based user accounts ----------------
 # This is a genuine backend for a learning/resume project: real accounts,
