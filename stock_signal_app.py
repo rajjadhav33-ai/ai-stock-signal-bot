@@ -1,4 +1,8 @@
 """
+Copyright (c) 2026 Raj Jadhav. All rights reserved.
+This source code is made publicly viewable for hosting purposes only.
+No permission is granted to copy, modify, or redistribute without consent.
+
 AI Stock Signal Bot — Web App (Streamlit version)
 ----------------------------------------------------
 Turns the basic AI stock signal bot into a simple web app.
@@ -70,7 +74,7 @@ def train_model(df):
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
-    model = LogisticRegression()    
+    model = LogisticRegression()
     model.fit(X_train, y_train)
 
     train_acc = model.score(X_train, y_train)
@@ -104,16 +108,7 @@ def get_signal(df, model, features, stoploss_pct, take_profit_pct, confidence_th
 
 # ---------------- Page config (must be the very first Streamlit command) ----------------
 
-st.set_page_config(page_title="AI Stock Signal App", layout="centered")
-hide = """
-<style>
-#MainMenu {visibility:hidden;}
-footer {visibility:hidden;}
-header {visibility:hidden;}
-</style>
-"""
-
-st.markdown(hide, unsafe_allow_html=True)
+st.set_page_config(page_title="AI Stock Signal Bot", layout="centered")
 
 # ---------------- Real backend: SQLite-based user accounts ----------------
 # This is a genuine backend for a learning/resume project: real accounts,
@@ -123,6 +118,10 @@ st.markdown(hide, unsafe_allow_html=True)
 # handling sensitive real-world data.
 
 DB_FILE = "users.db"
+
+# IMPORTANT: change this to YOUR OWN username (the one you sign up with)
+# so only you can see the admin panel below.
+ADMIN_USERNAME = "changeme_to_your_username"
 
 
 def init_db():
@@ -167,7 +166,46 @@ def check_user(username, password):
     return row is not None and row[0] == hash_password(password)
 
 
+def add_premium_column():
+    # Safe to call every time — only adds the column if it's missing.
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN is_premium INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    conn.close()
+
+
+def is_user_premium(username):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT is_premium FROM users WHERE username = ?", (username,))
+    row = c.fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+
+def get_all_users():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT username, is_premium FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def set_premium(username, value):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_premium = ? WHERE username = ?", (int(value), username))
+    conn.commit()
+    conn.close()
+
+
 init_db()
+add_premium_column()
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -184,9 +222,9 @@ if not st.session_state.logged_in:
         login_user = st.text_input("Username", key="login_user")
         login_pass = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
-            if check_user(login_user, login_pass):
+            if check_user(login_user.strip(), login_pass.strip()):
                 st.session_state.logged_in = True
-                st.session_state.username = login_user
+                st.session_state.username = login_user.strip()
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
@@ -195,9 +233,17 @@ if not st.session_state.logged_in:
         signup_user = st.text_input("Choose a username", key="signup_user")
         signup_pass = st.text_input("Choose a password", type="password", key="signup_pass")
         if st.button("Create account"):
-            if not signup_user or not signup_pass:
+            clean_user = signup_user.strip()
+            clean_pass = signup_pass.strip()
+            if not clean_user or not clean_pass:
                 st.warning("Please fill in both fields.")
-            elif add_user(signup_user, signup_pass):
+            elif " " in clean_user:
+                st.warning("Username cannot contain spaces.")
+            elif len(clean_user) < 3:
+                st.warning("Username must be at least 3 characters.")
+            elif len(clean_pass) < 4:
+                st.warning("Password must be at least 4 characters.")
+            elif add_user(clean_user, clean_pass):
                 st.success("Account created! Go to the Login tab to sign in.")
             else:
                 st.error("That username is already taken.")
@@ -209,55 +255,152 @@ if not st.session_state.logged_in:
 st.title("📈 AI Stock Signal Bot")
 st.caption("Learning project — not financial advice. For education only.")
 
+if st.session_state.username == ADMIN_USERNAME:
+    with st.expander("🛠️ Admin Panel — manage users"):
+        users = get_all_users()
+        if not users:
+            st.write("No users yet.")
+        for uname, prem in users:
+            col1, col2, col3 = st.columns([2, 1, 1])
+            col1.write(uname)
+            col2.write("⭐ Premium" if prem else "Free")
+            if prem:
+                if col3.button("Revoke", key=f"revoke_{uname}"):
+                    set_premium(uname, False)
+                    st.rerun()
+            else:
+                if col3.button("Grant", key=f"grant_{uname}"):
+                    set_premium(uname, True)
+                    st.rerun()
+
+        st.divider()
+        try:
+            with open(DB_FILE, "rb") as f:
+                st.download_button("⬇️ Download database file (users.db)", f, file_name="users.db")
+        except FileNotFoundError:
+            st.write("Database file not found yet.")
+
 with st.sidebar:
     st.write(f"Logged in as **{st.session_state.username}**")
     if st.button("Log out"):
         st.session_state.logged_in = False
         st.session_state.username = None
         st.rerun()
+
+    with st.expander("ℹ️ How to use this app"):
+        st.markdown(
+            "1. Enter a stock ticker (e.g. `AAPL`, `RELIANCE.NS`, `TCS.NS`)\n"
+            "2. Adjust stoploss / take-profit / confidence if you like\n"
+            "3. Click **Run Model**\n"
+            "4. Check the **Signal** tab for the prediction, **Chart** tab for the trend\n\n"
+            "This is a learning project — not financial advice."
+        )
+
+    is_premium = is_user_premium(st.session_state.username)
+
+    if is_premium:
+        st.success("⭐ Premium plan")
+    else:
+        st.info("Free plan")
+        with st.expander("Upgrade to Premium ⭐"):
+            st.write("Premium unlocks 2-year and 5-year history for the model.")
+            # Replace this URL with your own Stripe/Razorpay Payment Link
+            st.link_button("Upgrade now", "https://buy.stripe.com/your-payment-link-here")
+            st.caption(
+                "After paying, your account is upgraded manually (see grant_premium.py) "
+                "until an automated version is set up."
+            )
+
     st.header("Settings")
-    ticker = st.text_input("Stock ticker", value="RELIANCE.NS")
-    period = st.selectbox("History to use", ["1y", "2y", "5y"], index=1)
+    ticker = st.text_input(
+        "Stock ticker",
+        value="RELIANCE.NS",
+        help="Examples: AAPL, MSFT, RELIANCE.NS, TCS.NS, INFY.NS",
+    )
+
+    if is_premium:
+        period = st.selectbox("History to use", ["1y", "2y", "5y"], index=1)
+    else:
+        period = "1y"
+        st.caption("Free plan: limited to 1 year of history.")
+
     stoploss_pct = st.slider("Stoploss %", 1, 10, 2) / 100
     take_profit_pct = st.slider("Take-profit %", 1, 20, 4) / 100
     confidence_threshold = st.slider("Confidence threshold %", 50, 90, 55) / 100
     run_button = st.button("Run Model")
 
 if run_button:
-    with st.spinner("Fetching data and training model..."):
+    ticker_clean = ticker.strip().upper()
+
+    if not ticker_clean:
+        st.warning("Please enter a stock ticker first.")
+    else:
         try:
-            df = fetch_data(ticker, period)
-            if df.empty:
-                st.error("No data found for that ticker. Check the symbol (e.g. AAPL, TCS.NS, RELIANCE.NS).")
-            else:
-                df = add_features(df)
-                df = add_label(df)
-                model, features, train_acc, test_acc = train_model(df)
-                signal = get_signal(df, model, features, stoploss_pct, take_profit_pct, confidence_threshold)
+            with st.status(f"Running model for {ticker_clean}...", expanded=True) as status:
+                st.write("📥 Fetching price data...")
+                df = fetch_data(ticker_clean, period)
 
-                col1, col2 = st.columns(2)
-                col1.metric("Train accuracy", f"{train_acc:.1%}")
-                col2.metric("Test accuracy (trust this one)", f"{test_acc:.1%}")
-
-                st.subheader(f"Latest signal for {ticker}")
-                st.write(f"**Last close:** {signal['last_close']:.2f}")
-                st.write(f"**Model prediction:** {signal['prediction']} (confidence: {signal['probability']:.1%})")
-
-                if signal["action"].startswith("BUY"):
-                    st.success(f"Suggested action: {signal['action']}")
-                    st.write(f"Stoploss: {signal['stoploss_price']:.2f}")
-                    st.write(f"Take-profit: {signal['target_price']:.2f}")
+                if df.empty or len(df) < 60:
+                    status.update(label="No usable data found", state="error")
+                    st.error(
+                        f"Couldn't get enough data for **{ticker_clean}**. "
+                        "Double-check the symbol format (e.g. `AAPL`, `MSFT`, `RELIANCE.NS`, `TCS.NS`). "
+                        "If the symbol looks correct, Yahoo Finance may be having a temporary hiccup — try again in a minute."
+                    )
                 else:
-                    st.info(f"Suggested action: {signal['action']}")
+                    st.write("🧮 Building features...")
+                    df = add_features(df)
+                    df = add_label(df)
 
-                st.subheader("Price chart (last 6 months)")
-                st.line_chart(df[["Close", "sma_10", "sma_50"]].tail(126))
+                    if len(df) < 30:
+                        status.update(label="Not enough history to train reliably", state="error")
+                        st.error(
+                            "Not enough historical data after processing. "
+                            "Try a longer history period (if you're on Premium) or a different ticker."
+                        )
+                    else:
+                        st.write("🤖 Training model...")
+                        model, features, train_acc, test_acc = train_model(df)
+                        signal = get_signal(
+                            df, model, features, stoploss_pct, take_profit_pct, confidence_threshold
+                        )
+                        status.update(label="Done!", state="complete")
+
+                        tab_signal, tab_chart = st.tabs(["📊 Signal", "📈 Chart"])
+
+                        with tab_signal:
+                            col1, col2 = st.columns(2)
+                            col1.metric("Train accuracy", f"{train_acc:.1%}")
+                            col2.metric("Test accuracy (trust this one)", f"{test_acc:.1%}")
+
+                            st.subheader(f"Latest signal for {ticker_clean}")
+                            st.metric("Last close", f"{signal['last_close']:.2f}")
+                            st.write(
+                                f"**Model prediction:** {signal['prediction']} "
+                                f"(confidence: {signal['probability']:.1%})"
+                            )
+
+                            if signal["action"].startswith("BUY"):
+                                st.success(f"✅ Suggested action: {signal['action']}")
+                                colA, colB = st.columns(2)
+                                colA.metric("Stoploss", f"{signal['stoploss_price']:.2f}")
+                                colB.metric("Take-profit", f"{signal['target_price']:.2f}")
+                            else:
+                                st.info(f"⏸️ Suggested action: {signal['action']}")
+
+                        with tab_chart:
+                            st.subheader("Price chart (last 6 months)")
+                            st.line_chart(df[["Close", "sma_10", "sma_50"]].tail(126))
 
         except Exception as e:
-            st.error(f"Something went wrong: {e}")
+            st.error(
+                "Something went wrong while running the model. "
+                "This is usually a temporary data issue — try again in a minute, or try a different ticker."
+            )
+            with st.expander("Technical details (for debugging)"):
+                st.code(str(e))
 else:
     st.write("👈 Set your options in the sidebar and click **Run Model** to get a signal.")
-
 
 st.markdown("---")
 st.caption("© 2026 Raj Jadhav | All Rights Reserved")
