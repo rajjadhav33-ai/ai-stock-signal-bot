@@ -78,6 +78,11 @@ def add_features(df):
     # Volume change — is trading activity picking up or fading?
     df["volume_change"] = df["Volume"].pct_change()
 
+    # Safety net: some tickers have zero-volume days or flat prices, which can
+    # produce infinity from division (e.g. volume_change, bb_percent_b).
+    # Treat infinities as missing data rather than letting them crash the model.
+    df = df.replace([np.inf, -np.inf], np.nan)
+
     df = df.dropna()
     return df
 
