@@ -47,11 +47,36 @@ def add_features(df):
     df["sma_ratio"] = df["sma_10"] / df["sma_50"]
     df["volatility_10"] = df["return_1d"].rolling(10).std()
 
+    # RSI (14-day)
     delta = df["Close"].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df["rsi_14"] = 100 - (100 / (1 + rs))
+
+    # MACD histogram (12, 26, 9) — trend + momentum
+    ema_12 = df["Close"].ewm(span=12, adjust=False).mean()
+    ema_26 = df["Close"].ewm(span=26, adjust=False).mean()
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df["macd_hist"] = macd_line - signal_line
+
+    # Bollinger Band %B — where price sits within its volatility bands (0-1 range typically)
+    sma_20 = df["Close"].rolling(20).mean()
+    std_20 = df["Close"].rolling(20).std()
+    upper_band = sma_20 + 2 * std_20
+    lower_band = sma_20 - 2 * std_20
+    df["bb_percent_b"] = (df["Close"] - lower_band) / (upper_band - lower_band)
+
+    # ATR (14-day) — average true range, a volatility measure independent of direction
+    high_low = df["High"] - df["Low"]
+    high_close = (df["High"] - df["Close"].shift()).abs()
+    low_close = (df["Low"] - df["Close"].shift()).abs()
+    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df["atr_14"] = true_range.rolling(14).mean()
+
+    # Volume change — is trading activity picking up or fading?
+    df["volume_change"] = df["Volume"].pct_change()
 
     df = df.dropna()
     return df
@@ -65,7 +90,16 @@ def add_label(df):
 
 
 def train_model(df):
-    features = ["return_1d", "sma_ratio", "volatility_10", "rsi_14"]
+    features = [
+        "return_1d",
+        "sma_ratio",
+        "volatility_10",
+        "rsi_14",
+        "macd_hist",
+        "bb_percent_b",
+        "atr_14",
+        "volume_change",
+    ]
     X = df[features]
     y = df["target"]
 
@@ -83,13 +117,19 @@ def train_model(df):
     return model, features, train_acc, test_acc
 
 
-def get_signal(df, model, features, stoploss_pct, take_profit_pct, confidence_threshold):
+def get_signal(df, model, features, stoploss_pct, take_profit_pct, confidence_threshold, stoploss_mode="fixed", atr_multiplier=1.5):
     latest_row = df[features].iloc[[-1]]
     prediction = model.predict(latest_row)[0]
     probability = model.predict_proba(latest_row)[0][1]
 
     last_close = float(df["Close"].iloc[-1])
-    stoploss_price = last_close * (1 - stoploss_pct)
+    last_atr = float(df["atr_14"].iloc[-1])
+
+    if stoploss_mode == "atr":
+        stoploss_price = last_close - (atr_multiplier * last_atr)
+    else:
+        stoploss_price = last_close * (1 - stoploss_pct)
+
     target_price = last_close * (1 + take_profit_pct)
 
     action = "HOLD / NO TRADE"
@@ -213,9 +253,27 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 if not st.session_state.logged_in:
-    st.title("🔒 AI Stock Signal Bot")
-    st.caption("Create a real account or log in.")
+    st.title("📈 AI Stock Signal Bot")
+    st.caption("AI-powered trading signals — entry, exit, and stoploss guidance in one place.")
 
+    col1, col2, col3 = st.columns(3)
+    col1.markdown("**🤖 ML-Powered**\n\nModel trains fresh on real market data every run")
+    col2.markdown("**📊 8 Indicators**\n\nRSI, MACD, Bollinger Bands, ATR, and more")
+    col3.markdown("**🎯 Smart Stoploss**\n\nFixed % or volatility-adjusted (ATR) options")
+
+    st.divider()
+
+    with st.expander("💳 Free vs Premium"):
+        st.markdown(
+            "| | Free | Premium ⭐ |\n"
+            "|---|---|---|\n"
+            "| History length | 1 year | 2–5 years |\n"
+            "| All 8 indicators | ✅ | ✅ |\n"
+            "| Stoploss options | ✅ | ✅ |\n"
+            "| Price | ₹0 | Contact for pricing |\n"
+        )
+
+    st.subheader("Get started")
     tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
 
     with tab_login:
@@ -324,7 +382,13 @@ with st.sidebar:
         period = "1y"
         st.caption("Free plan: limited to 1 year of history.")
 
-    stoploss_pct = st.slider("Stoploss %", 1, 10, 2) / 100
+    stoploss_mode_label = st.radio(
+        "Stoploss method",
+        ["Fixed %", "ATR-based (smarter, adapts to volatility)"],
+        help="ATR-based stoploss widens automatically for volatile stocks and tightens for calm ones.",
+    )
+    stoploss_mode = "atr" if stoploss_mode_label.startswith("ATR") else "fixed"
+    stoploss_pct = st.slider("Stoploss % (used if Fixed selected)", 1, 10, 2) / 100
     take_profit_pct = st.slider("Take-profit %", 1, 20, 4) / 100
     confidence_threshold = st.slider("Confidence threshold %", 50, 90, 55) / 100
     run_button = st.button("Run Model")
@@ -362,7 +426,8 @@ if run_button:
                         st.write("🤖 Training model...")
                         model, features, train_acc, test_acc = train_model(df)
                         signal = get_signal(
-                            df, model, features, stoploss_pct, take_profit_pct, confidence_threshold
+                            df, model, features, stoploss_pct, take_profit_pct,
+                            confidence_threshold, stoploss_mode=stoploss_mode,
                         )
                         status.update(label="Done!", state="complete")
 
@@ -382,8 +447,9 @@ if run_button:
 
                             if signal["action"].startswith("BUY"):
                                 st.success(f"✅ Suggested action: {signal['action']}")
+                                stoploss_label = "Stoploss (ATR-based)" if stoploss_mode == "atr" else "Stoploss (fixed %)"
                                 colA, colB = st.columns(2)
-                                colA.metric("Stoploss", f"{signal['stoploss_price']:.2f}")
+                                colA.metric(stoploss_label, f"{signal['stoploss_price']:.2f}")
                                 colB.metric("Take-profit", f"{signal['target_price']:.2f}")
                             else:
                                 st.info(f"⏸️ Suggested action: {signal['action']}")
