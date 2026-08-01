@@ -26,6 +26,8 @@ import numpy as np
 import yfinance as yf
 import sqlite3
 import hashlib
+import datetime
+import extra_streamlit_components as stx
 from sklearn.linear_model import LogisticRegression
 
 # ---------------- Core logic (same model as before) ----------------
@@ -155,6 +157,10 @@ def get_signal(df, model, features, stoploss_pct, take_profit_pct, confidence_th
 
 st.set_page_config(page_title="AI Stock Signal Bot", layout="centered")
 
+# Cookie manager — lets login survive a page refresh or the app waking from sleep,
+# instead of only living in temporary in-memory session state.
+cookie_manager = stx.CookieManager(key="cookie_manager")
+
 # ---------------- Real backend: SQLite-based user accounts ----------------
 # This is a genuine backend for a learning/resume project: real accounts,
 # stored in a local database file (users.db), with hashed passwords.
@@ -257,6 +263,13 @@ if "logged_in" not in st.session_state:
 if "username" not in st.session_state:
     st.session_state.username = None
 
+# Try to restore a previous session from the "remember me" cookie
+if not st.session_state.logged_in:
+    remembered_user = cookie_manager.get("remembered_username")
+    if remembered_user:
+        st.session_state.logged_in = True
+        st.session_state.username = remembered_user
+
 if not st.session_state.logged_in:
     st.title("📈 AI Stock Signal Bot")
     st.caption("AI-powered trading signals — entry, exit, and stoploss guidance in one place.")
@@ -288,6 +301,8 @@ if not st.session_state.logged_in:
             if check_user(login_user.strip(), login_pass.strip()):
                 st.session_state.logged_in = True
                 st.session_state.username = login_user.strip()
+                expires_at = datetime.datetime.now() + datetime.timedelta(days=30)
+                cookie_manager.set("remembered_username", login_user.strip(), expires_at=expires_at)
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
@@ -348,6 +363,10 @@ with st.sidebar:
     if st.button("Log out"):
         st.session_state.logged_in = False
         st.session_state.username = None
+        try:
+            cookie_manager.delete("remembered_username")
+        except KeyError:
+            pass  # cookie already gone
         st.rerun()
 
     with st.expander("ℹ️ How to use this app"):
